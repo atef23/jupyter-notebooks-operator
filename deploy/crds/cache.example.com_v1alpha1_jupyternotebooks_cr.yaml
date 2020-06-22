@@ -1,0 +1,32 @@
+apiVersion: cache.example.com/v1alpha1
+kind: JupyterNotebooks
+metadata:
+  name: example-jupyternotebooks
+spec:
+  # Add fields here
+  size: 2
+
+  # JupyterHub deployment developed by Graham Dumpleton - https://github.com/aicoe/jupyterhub-ocp-oauth
+  aicoe-jupyterhub:
+    # Deploy the ODH aicoe-jupyterhub role if True
+    odh_deploy: true
+    notebook_cpu: 1
+    notebook_memory: 2Gi
+    registry: 'quay.io'
+    repository: 'odh-jupyterhub'
+    notebook_images:
+      # ODH only deploys spark-minimal-notebook by default to speed up basic deployment
+      deploy_all_notebooks: False
+      # If you have GPU card(s) in you cluster you can build and deploy CUDA enabled notebook images
+      deploy_cuda_notebooks: False
+
+    # StorageClass to use for jupyterhub-db and notebook PersistentVolumeClaims
+    storage_class: null
+    db_memory: 1Gi
+    jupyterhub_memory: 1Gi
+    notebook_image: 's2i-minimal-notebook:3.6'
+    s3_endpoint_url: ''
+    #GPU mode defines a method used to spawn GPU enabled containers. Allow values are: None/empty (default), selinux, privileged
+    gpu_mode: ''
+
+    user_pvc_size: 2Gi
