@@ -3,9 +3,7 @@ package jupyternotebooks
 import (
 	"context"
 	"reflect"
-
 	cachev1alpha1 "github.com/atef23/jupyter-notebooks-operator/pkg/apis/cache/v1alpha1"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -20,6 +18,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	// route imports
+	routev1 "github.com/openshift/api/route/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"github.com/atef23/jupyter-notebooks-operator/pkg/controller/ocp"
+	"fmt"
 )
 
 var log = logf.Log.WithName("controller_jupyternotebooks")
@@ -32,6 +36,11 @@ var log = logf.Log.WithName("controller_jupyternotebooks")
 // Add creates a new JupyterNotebooks Controller and adds it to the Manager. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
 func Add(mgr manager.Manager) error {
+
+	if err := routev1.AddToScheme(mgr.GetScheme()); err != nil {
+		return err
+	}
+
 	return add(mgr, newReconciler(mgr))
 }
 
@@ -61,6 +70,14 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		OwnerType:    &cachev1alpha1.JupyterNotebooks{},
 	})
 	if err != nil {
+		return err
+	}
+
+	// watch for Route only on OpenShift
+	if err = c.Watch(&source.Kind{Type: &routev1.Route{}}, &handler.EnqueueRequestForOwner{
+		IsController: true,
+		OwnerType:    &cachev1alpha1.JupyterNotebooks{},
+	}); err != nil {
 		return err
 	}
 
@@ -135,6 +152,45 @@ func (r *ReconcileJupyterNotebooks) Reconcile(request reconcile.Request) (reconc
 
 
 
+		route := &routev1.Route{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "route.openshift.io/v1",
+				Kind:       "Route",
+			},	
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      jupyterNotebooks.Name,
+				Namespace: jupyterNotebooks.Namespace,
+			},
+			Spec: routev1.RouteSpec{
+				To: routev1.RouteTargetReference{
+					Kind: "Service",
+					Name: jupyterNotebooks.Name,
+				},
+				Port: &routev1.RoutePort{
+					TargetPort: intstr.FromInt(8888),
+				},
+			},
+		}
+
+		reqLogger.Info("Route defined", route)
+		reqLogger.Info("Creating a new Route", "Route.Namespace", route.Namespace, "Route.Name", route.Name)
+
+	
+		controllerutil.SetControllerReference(jupyterNotebooks, route, r.scheme)
+		if err := r.client.Create(context.TODO(), route); err != nil {
+			reqLogger.Error(err, "Failed to create new Route", "Route.Namespace", route.Namespace, "Route.Name", route.Name)
+			return reconcile.Result{}, err
+		}
+	
+		/*
+		err = r.client.Create(context.TODO(), route)
+		if err != nil {
+			reqLogger.Error(err, "Failed to create new Route")
+			return reconcile.Result{}, err
+		}
+		*/
+
+
 
 
 
@@ -153,6 +209,38 @@ func (r *ReconcileJupyterNotebooks) Reconcile(request reconcile.Request) (reconc
 		reqLogger.Error(err, "Failed to get Deployment")
 		return reconcile.Result{}, err
 	}
+
+
+
+
+		// define a new route
+		/*
+		route := &routev1.Route{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "route.openshift.io/v1",
+				Kind:       "Route",
+			},	
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      jupyterNotebooks.Name,
+				Namespace: jupyterNotebooks.Namespace,
+			},
+			Spec: routev1.RouteSpec{
+				TLS: &routev1.TLSConfig{
+					InsecureEdgeTerminationPolicy: routev1.InsecureEdgeTerminationPolicyRedirect,
+					Termination:                   routev1.TLSTerminationEdge,
+				},
+				To: routev1.RouteTargetReference{
+					Kind: "Service",
+					Name: jupyterNotebooks.Name,
+				},
+				Port: &routev1.RoutePort{
+					TargetPort: intstr.FromInt(8888),
+				},
+			},
+		}
+		*/
+
+
 
 	// Ensure the deployment size is the same as the spec
 	size := jupyterNotebooks.Spec.Size
@@ -235,6 +323,12 @@ func labelsForJupyterNotebooks(name string) map[string]string {
 	return map[string]string{"app": "jupyterNotebooks", "jupyterNotebooks_cr": name}
 }
 
+func selectorsForService(name string) map[string]string {
+	return map[string]string{
+		"app": "jupyterNotebooks",
+	}
+}
+
 // getPodNames returns the pod names of the array of pods passed in
 func getPodNames(pods []corev1.Pod) []string {
 	var podNames []string
@@ -253,25 +347,70 @@ func getPodNames(pods []corev1.Pod) []string {
 
 
 
-
-
 // serviceForJupyterNotebooks returns a jupyterNotebooks Service object
 func (r *ReconcileJupyterNotebooks) serviceForJupyterNotebooks(m *cachev1alpha1.JupyterNotebooks) *corev1.Service {
-	ls := labelsForJupyterNotebooks(m.Name)
+	selectors := selectorsForService(m.Name)
 
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      m.Name,
 			Namespace: m.Namespace,
 		},
-		Spec: corev1.ServiceSpec{
-			{
-				Ports: jupyterNoteBooksPort.asServicePorts(),
-			},
-		},
-
 	}
+
+	service.Spec = corev1.ServiceSpec{
+		Ports:     jupyterNoteBooksPort.asServicePorts(),
+		Selector:  selectors,
+	}
+
 	// Set JupyterNotebooks instance as the owner and controller
 	controllerutil.SetControllerReference(m, service, r.scheme)
 	return service
 }
+
+
+
+
+
+
+
+
+
+func (r *ReconcileJupyterNotebooks) CreateRoute(m *cachev1alpha1.JupyterNotebooks) *routev1.Route {
+
+	route := ocp.NewRoute(m.Name, m.Namespace, fmt.Sprintf("%s-server", m.Name), 8888)
+
+	// Set JupyterNotebooks instance as the owner and controller
+	controllerutil.SetControllerReference(m, route, r.scheme)
+	return route
+}
+
+
+
+
+
+
+
+/*
+func (r *ReconcileJupyterNotebooks) NewRoute(m *cachev1alpha1.JupyterNotebooks, port int) *routev1.Route {
+	return &routev1.Route{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      m.Name,
+			Namespace: m.Namespace,
+		},
+		Spec: routev1.RouteSpec{
+			TLS: &routev1.TLSConfig{
+				InsecureEdgeTerminationPolicy: routev1.InsecureEdgeTerminationPolicyRedirect,
+				Termination:                   routev1.TLSTerminationEdge,
+			},
+			To: routev1.RouteTargetReference{
+				Kind: "Service",
+				Name: m.Name,
+			},
+			Port: &routev1.RoutePort{
+				TargetPort: intstr.FromInt(port),
+			},
+		},
+	}
+}
+*/
