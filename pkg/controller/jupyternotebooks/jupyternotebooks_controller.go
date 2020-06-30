@@ -172,25 +172,13 @@ func (r *ReconcileJupyterNotebooks) Reconcile(request reconcile.Request) (reconc
 			},
 		}
 
-		reqLogger.Info("Route defined", route)
 		reqLogger.Info("Creating a new Route", "Route.Namespace", route.Namespace, "Route.Name", route.Name)
 
-	
 		controllerutil.SetControllerReference(jupyterNotebooks, route, r.scheme)
 		if err := r.client.Create(context.TODO(), route); err != nil {
 			reqLogger.Error(err, "Failed to create new Route", "Route.Namespace", route.Namespace, "Route.Name", route.Name)
 			return reconcile.Result{}, err
 		}
-	
-		/*
-		err = r.client.Create(context.TODO(), route)
-		if err != nil {
-			reqLogger.Error(err, "Failed to create new Route")
-			return reconcile.Result{}, err
-		}
-		*/
-
-
 
 
 
@@ -305,7 +293,13 @@ func (r *ReconcileJupyterNotebooks) deploymentForJupyterNotebooks(m *cachev1alph
 						{
 							Name:    "jupyterlab",
 							Image:   "quay.io/aaziz/jupyterlab:latest",
-							Command: []string{"sleep", "3600"},
+							Ports: []corev1.ContainerPort{
+								{
+									Protocol:      corev1.ProtocolTCP,
+									ContainerPort: 8888,
+								},
+							},
+
 						},
 					},
 				},
